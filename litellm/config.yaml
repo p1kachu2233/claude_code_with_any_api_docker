@@ -1,0 +1,8 @@
+model_list:
+  - model_name: cerebras-gpt-oss
+    litellm_params:
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
+
+general_settings:
+  master_key: sk-claudecode-local

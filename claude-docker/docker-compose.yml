@@ -1,0 +1,39 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm-cerebras
+    ports:
+      - "4000:4000"
+    environment:
+      - CEREBRAS_API_KEY=APIKEY
+    volumes:
+      - C:\claude-code\litellm\config.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    restart: unless-stopped
+
+  claude-code:
+    build: .
+    container_name: claude-code
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    environment:
+      - HOME=/home/claude
+      - PATH=/home/claude/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - ANTHROPIC_BASE_URL=http://host.docker.internal:4000
+      - ANTHROPIC_AUTH_TOKEN=sk-claudecode-local
+      - ANTHROPIC_MODEL=cerebras-gpt-oss
+      - ANTHROPIC_SMALL_FAST_MODEL=cerebras-gpt-oss
+    volumes:
+      - C:\claude-code\claude-workspace:/workspace
+      - claude_user_home:/home/claude
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    depends_on:
+      - litellm
+
+volumes:
+  claude_user_home:

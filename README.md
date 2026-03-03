@@ -15,19 +15,44 @@
    └─ config.yaml
 ```
 
+## 项目说明
+
+本项目包含两个服务：
+
+* **litellm**：作为 Claude Code 的上游代理，负责转发请求到实际 provider
+* **claude-code**：Claude Code 运行容器，用于在 `/workspace` 中读取和修改文件
+
+其中：
+
+* 本机 `claude-workspace/` 会挂载到容器内的 `/workspace`
+* `/home/claude` 使用 Docker volume 持久化，用于保存 Claude 用户目录、配置、缓存，以及当前安装的 Claude Code
+
+---
+
 ## 文件说明
 
-* `claude-docker/Dockerfile`
-  用于构建 Claude Code 运行环境
+### `claude-docker/Dockerfile`
 
-* `claude-docker/docker-compose.yml`
-  用于启动 `claude-code` 和 `litellm`
+用于构建 Claude Code 运行环境。
 
-* `claude-workspace/`
-  工作目录，会挂载到容器里的 `/workspace`
+### `claude-docker/docker-compose.yml`
 
-* `litellm/config.yaml`
-  用于配置 LiteLLM 的上游模型/provider
+用于启动：
+
+* `claude-code`
+* `litellm`
+
+### `claude-workspace/`
+
+工作目录，会挂载到容器里的：
+
+```text
+/workspace
+```
+
+### `litellm/config.yaml`
+
+用于配置 LiteLLM 的上游模型和认证信息。
 
 ---
 
@@ -55,7 +80,7 @@ cd <仓库名>
 cd claude-docker
 ```
 
-首次启动，或修改了 `Dockerfile` 之后：
+首次启动，或修改了 `Dockerfile` / `docker-compose.yml` 之后：
 
 ```bash
 docker compose up -d --build
@@ -253,6 +278,23 @@ environment:
 
 ---
 
+### 8. `claude_user_home` volume
+
+例如：
+
+```yaml
+volumes:
+  - claude_user_home:/home/claude
+```
+
+说明：
+
+* 该 volume 会持久化整个 `/home/claude`
+* Claude Code 的用户级安装、配置、缓存、登录状态通常都会保存在这里
+* **当前实际运行的 Claude 版本，通常由这个 volume 里的内容决定**
+
+---
+
 ## `litellm/config.yaml` 中可修改的内容
 
 示例：
@@ -288,7 +330,7 @@ model_name: cerebras-gpt-oss
 ANTHROPIC_MODEL=cerebras-gpt-oss
 ```
 
-保持一致
+保持一致。
 
 ---
 
@@ -367,7 +409,7 @@ master_key: sk-claudecode-local
 ANTHROPIC_AUTH_TOKEN=sk-claudecode-local
 ```
 
-保持一致
+保持一致。
 
 ---
 
@@ -401,26 +443,164 @@ claude
 
 ---
 
-## 更新项目
+## 更新说明
 
-普通更新：
+### 先理解一件事
 
-```bash
-docker compose up -d
+当前 Dockerfile 中，Claude Code 是安装在：
+
+```text
+/home/claude
 ```
 
-修改了 `Dockerfile` 后更新：
+而 `docker-compose.yml` 又把整个 `/home/claude` 持久化到了 volume：
+
+```yaml
+- claude_user_home:/home/claude
+```
+
+这意味着：
+
+* **镜像里安装的 Claude，只会在 volume 初次创建时复制进去**
+* 一旦 volume 已存在，后续容器启动时 `/home/claude` 会被 volume 覆盖
+* 因此：
 
 ```bash
 docker compose up -d --build
 ```
 
-拉取远程镜像后更新：
+**不能保证更新当前实际使用的 Claude Code 版本**
+
+它能更新的是：
+
+* Dockerfile
+* 容器镜像
+* 系统依赖
+* Compose 配置
+
+但**不一定会更新 `/home/claude` volume 里已经存在的 Claude Code**
+
+---
+
+## 推荐更新方式
+
+### 方案一：保留现有 volume，手动升级 Claude Code
+
+适合：
+
+* 保留当前配置、缓存、登录状态
+* 不想删除 `/home/claude`
+* 更关注方便
+
+进入容器执行：
 
 ```bash
-docker compose pull
-docker compose up -d
+docker exec -it claude-code bash
+curl -fsSL https://claude.ai/install.sh | bash
 ```
+
+或者一条命令执行：
+
+```bash
+docker exec -it claude-code bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'
+```
+
+升级后检查版本：
+
+```bash
+docker exec -it claude-code bash -lc 'which claude && claude --version'
+```
+
+说明：
+
+* 这种方式会直接更新 volume 中的 Claude Code
+* 容器重启后版本仍会保留
+* **这是当前项目结构下最实用的 Claude 更新方式**
+
+---
+
+### 方案二：删除 `claude_user_home` volume 后重建
+
+适合：
+
+* 想要完全干净地重装 Claude Code
+* 接受丢失 `/home/claude` 中的配置、缓存、登录状态
+
+停止容器：
+
+```bash
+docker compose down
+```
+
+查看 volume：
+
+```bash
+docker volume ls
+```
+
+删除对应 volume：
+
+```bash
+docker volume rm <项目名>_claude_user_home
+```
+
+重新构建并启动：
+
+```bash
+docker compose up -d --build
+```
+
+说明：
+
+* 删除 volume 后，新的 `/home/claude` 会重新从镜像初始化
+* 这种方式能确保镜像中的 Claude 安装重新生效
+* 代价是会丢失原有用户目录数据
+
+---
+
+### 方案三：只更新镜像和容器环境
+
+适合：
+
+* 修改了 `Dockerfile`
+* 修改了 compose 配置
+* 更新系统依赖
+* 但**不依赖它更新 Claude Code 本体**
+
+执行：
+
+```bash
+docker compose up -d --build
+```
+
+说明：
+
+* 这会更新镜像和容器
+* **不应被视为 Claude Code 的可靠升级方式**
+* 如果你要升级的是 Claude Code 本身，请优先使用“方案一”或“方案二”
+
+---
+
+## 更新建议
+
+### 日常使用建议
+
+如果只是平时使用，推荐：
+
+1. 保留 `claude_user_home` volume
+2. 需要升级 Claude Code 时，在容器中手动执行安装脚本
+3. 需要更新系统环境时，再执行：
+
+```bash
+docker compose up -d --build
+```
+
+也就是说：
+
+* **Claude Code 本体更新**：手动执行安装脚本
+* **镜像 / 环境更新**：`docker compose up -d --build`
+
+这两者不是一回事。
 
 ---
 
@@ -430,7 +610,7 @@ docker compose up -d
 docker compose down
 ```
 
-> 不要随便执行 `docker compose down -v`，这会删除 volume。
+> 不要随便执行 `docker compose down -v`，这会删除 volume，包括 `claude_user_home`。
 
 ---
 
@@ -466,6 +646,18 @@ docker compose logs -f
 docker exec -it claude-code bash
 ```
 
+手动升级 Claude Code：
+
+```bash
+docker exec -it claude-code bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'
+```
+
+查看 Claude 版本：
+
+```bash
+docker exec -it claude-code bash -lc 'which claude && claude --version'
+```
+
 停止：
 
 ```bash
@@ -477,9 +669,19 @@ docker compose down
 ## 说明
 
 * `claude-workspace/` 是 Claude Code 的工作目录
+
 * `litellm/config.yaml` 控制上游模型/provider
+
 * 如果需要切换 provider，通常只需要修改：
 
-  * `docker-compose.yml` 中的 API key 变量
+  * `docker-compose.yml` 中的 API key 环境变量
   * `litellm/config.yaml` 中的 `model` 和 `api_key`
-* 更新容器时，volume 通常会保留，除非显式删除
+
+* 当前项目结构下，`/home/claude` 是持久化目录，因此：
+
+  * Claude 配置会保留
+  * Claude 缓存会保留
+  * Claude 登录状态通常会保留
+  * Claude Code 的用户级安装通常也会保留
+
+---
